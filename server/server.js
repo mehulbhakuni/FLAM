@@ -22,7 +22,14 @@ function getRoomState(room) {
   return roomStates[room];
 }
 
-// Helper to get array of socket ids in a room
+function deleteRoomState(room) {
+  if (roomStates[room]) {
+    console.log(`🧹 Room "${room}" is now empty. Clearing its history.`);
+    delete roomStates[room];
+  }
+}
+
+// Helper: get array of socket IDs in a room
 function getClientsInRoom(room) {
   const s = io.sockets.adapter.rooms.get(room);
   return s ? Array.from(s) : [];
@@ -31,65 +38,86 @@ function getClientsInRoom(room) {
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
-  // Default join main room
+  // Default join 'main' room
   const defaultRoom = 'main';
   socket.join(defaultRoom);
   socket.currentRoom = defaultRoom;
 
-  // Ensure room state exists and send initial canvas
+  // Initialize main room state
   const state = getRoomState(defaultRoom);
   socket.emit('initCanvas', state.strokes);
-
-  // Send current user list for that room
   io.in(defaultRoom).emit('userListUpdate', getClientsInRoom(defaultRoom));
-  // Handle room joining/switching
+
+  // Join or switch room
   socket.on('joinRoom', (roomName) => {
     if (!roomName) roomName = 'main';
-    const prev = socket.currentRoom;
+    const prevRoom = socket.currentRoom;
 
-    if (prev === roomName) {
-      // Already in this room — just refresh canvas and list
+    if (prevRoom === roomName) {
       socket.emit('initCanvas', getRoomState(roomName).strokes);
       socket.emit('userListUpdate', getClientsInRoom(roomName));
       return;
     }
 
     // Leave previous room
-    if (prev) {
-      socket.leave(prev);
-      io.in(prev).emit('userListUpdate', getClientsInRoom(prev));
+    if (prevRoom) {
+      socket.leave(prevRoom);
+      io.in(prevRoom).emit('userListUpdate', getClientsInRoom(prevRoom));
+
+      // Clean up room if empty now
+      const prevUsers = getClientsInRoom(prevRoom);
+      if (prevUsers.length === 0) {
+        deleteRoomState(prevRoom);
+      }
     }
 
     // Join new room
     socket.join(roomName);
     socket.currentRoom = roomName;
 
-    // Get the room's drawing state
+    // Initialize or retrieve the room state
     const newState = getRoomState(roomName);
 
-    // Send that room's canvas immediately
+    // Send its current canvas to the joining socket
     socket.emit('initCanvas', newState.strokes);
 
-    // Broadcast updated user list
+    // Broadcast user list for the new room
     io.in(roomName).emit('userListUpdate', getClientsInRoom(roomName));
-
+    broadcastRoomSummary(); 
+    // Rebind socket event handlers for new room state
     handleSocketEvents(io, socket, newState);
 
-    console.log(`Socket ${socket.id} joined room ${roomName}`);
+    console.log(`Socket ${socket.id} joined room "${roomName}"`);
   });
 
   // Handle disconnect cleanup
   socket.on('disconnect', () => {
     console.log(`User disconnected: ${socket.id}`);
     const room = socket.currentRoom;
+
     if (room) {
       io.in(room).emit('userListUpdate', getClientsInRoom(room));
       socket.to(room).emit('cursorRemove', socket.id);
+
+      // If no users remain, delete that room's history
+      const remaining = getClientsInRoom(room);
+      if (remaining.length === 0) {
+        deleteRoomState(room);
+      }
+      broadcastRoomSummary(); 
     }
   });
 });
 
+// Broadcast active room summary to all clients
+function broadcastRoomSummary() {
+  const summary = [];
+  for (const room in roomStates) {
+    const users = getClientsInRoom(room);
+    summary.push({ room, users: users.length });
+  }
+  io.emit('roomSummaryUpdate', summary);
+}
+
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () =>
-  console.log(`Server running at http://localhost:${PORT}`)
-);
+server.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));

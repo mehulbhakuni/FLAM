@@ -101,3 +101,46 @@ socket.on('reconnect', (attempt) => {
   socket.emit('joinRoom', window.currentRoom);
   socket.emit('requestCanvasState');
 });
+
+// Listen for room summary updates
+socket.on('roomSummaryUpdate', (rooms) => {
+  const panel = document.getElementById('roomSummary');
+  if (!panel) return;
+
+  if (!rooms || rooms.length === 0) {
+    panel.innerHTML = '<p>No active rooms.</p>';
+    return;
+  }
+
+  let html = '<h4>🏠 Active Rooms</h4><ul>';
+  rooms.forEach((r) => {
+    const isActive = r.room === window.currentRoom;
+    html += `
+      <li class="room-item ${isActive ? 'active-room' : ''}" 
+          data-room="${r.room}">
+        <strong>${r.room}</strong> 
+        — ${r.users} user${r.users !== 1 ? 's' : ''}
+      </li>`;
+  });
+  html += '</ul>';
+  panel.innerHTML = html;
+
+  // Make room list clickable
+  const roomItems = panel.querySelectorAll('.room-item');
+  roomItems.forEach((item) => {
+    item.addEventListener('click', () => {
+      const roomName = item.dataset.room;
+      if (roomName === window.currentRoom) return; // already there
+      console.log(`Joining room "${roomName}" from summary panel`);
+      if (window.joinRoom) window.joinRoom(roomName);
+
+      // Update input field to match
+      const roomInput = document.getElementById('roomInput');
+      if (roomInput) roomInput.value = roomName;
+
+      // Highlight active room immediately (optimistic UI)
+      roomItems.forEach((el) => el.classList.remove('active-room'));
+      item.classList.add('active-room');
+    });
+  });
+});

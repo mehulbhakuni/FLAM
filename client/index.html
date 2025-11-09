@@ -10,33 +10,85 @@
   <div id="app-container">
     <h2>🎨 Real-Time Collaborative Drawing Canvas</h2>
 
-    <div id="toolbar">
-      <label>Brush Color: <input type="color" id="colorPicker" value="#000000" /></label>
-      <label>Brush Size: <input type="range" id="brushSize" min="1" max="20" value="3" /></label>
-      <button id="drawBtn">Draw</button>
-      <button id="eraserBtn">Eraser</button>
-      <button id="undoBtn">Undo</button>
-      <button id="redoBtn">Redo</button>
-      <button id="clearBtn">Clear</button>
-
-      <!-- Room selector -->
-      <label style="margin-left:8px;">
-        Room:
-        <input id="roomInput" type="text" placeholder="main" style="width:90px; margin-left:6px;" />
-      </label>
-      <button id="joinRoomBtn">Join</button>
+    <!-- Room Status -->
+    <div id="roomStatus" class="warning">
+      <span id="currentRoom">🟢 Current Room: <strong>main</strong></span>
+      <span id="roomHint">💡 You are in the main room. Join or create a room to collaborate!</span>
     </div>
 
-    <canvas id="canvas" width="1000" height="600"></canvas>
+    <div id="layout">
+      <!-- Toolbar Section (Left) -->
+      <div id="toolbar">
+        <h3>🛠️ Tools</h3>
+        <label>Brush Color: <input type="color" id="colorPicker" value="#000000" /></label>
+        <label>Brush Size: <input type="range" id="brushSize" min="1" max="20" value="3" /></label>
 
-    <div id="users">
-      <h4>🧑‍🤝‍🧑 Active Users:</h4>
-      <ul id="userList"></ul>
+        <button id="drawBtn" class="active">Draw</button>
+        <button id="eraserBtn">Eraser</button>
+        <button id="undoBtn">Undo</button>
+        <button id="redoBtn">Redo</button>
+        <button id="clearBtn">Clear</button>
+
+        <div class="roomJoiner">
+          <label>Room:</label>
+          <input id="roomInput" type="text" placeholder="Enter room ID" />
+          <button id="joinRoomBtn">Join</button>
+        </div>
+      </div>
+
+      <!-- Main Canvas + Info (Right) -->
+      <div id="rightArea">
+        <div id="topInfo">
+          <div id="users">
+            <h4>🧑‍🤝‍🧑 Active Users</h4>
+            <ul id="userList"></ul>
+          </div>
+
+          <div id="roomSummaryContainer">
+            <div id="roomSummary">
+              <h4>🏠 Active Rooms</h4>
+              <ul id="roomList">
+                <li>Loading...</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <canvas id="canvas" width="1000" height="600"></canvas>
+      </div>
     </div>
   </div>
-    <script src="/socket.io/socket.io.js"></script>
-    <script src="canvas.js"></script>
-    <script src="websocket.js"></script>
-    <script src="main.js"></script>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="canvas.js"></script>
+  <script src="websocket.js"></script>
+  <script src="main.js"></script>
+
+  <script>
+    const currentRoomDisplay = document.getElementById('currentRoom');
+    const roomHint = document.getElementById('roomHint');
+    const joinBtn = document.getElementById('joinRoomBtn');
+    const roomInput = document.getElementById('roomInput');
+    let currentRoom = 'main';
+
+    joinBtn.addEventListener('click', () => {
+      const newRoom = roomInput.value.trim() || 'main';
+      if (window.socket) window.socket.emit('joinRoom', newRoom);
+      currentRoom = newRoom;
+      updateRoomStatus();
+    });
+
+    function updateRoomStatus() {
+      currentRoomDisplay.innerHTML = `🟢 Current Room: <strong>${currentRoom}</strong>`;
+      const roomStatus = document.getElementById('roomStatus');
+      if (currentRoom === 'main') {
+        roomHint.textContent = '💡 You are in the main room. Join or create a room to collaborate!';
+        roomStatus.classList.add('warning');
+      } else {
+        roomHint.textContent = '✅ You are collaborating in a shared room!';
+        roomStatus.classList.remove('warning');
+      }
+    }
+  </script>
 </body>
 </html>
