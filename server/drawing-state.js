@@ -28,9 +28,9 @@ function loadState() {
 
 function initDrawingState() {
   return {
-    strokes: loadState(),         // Load previous strokes (persistent)
-    undoneStrokesByUser: {},      // Track undone strokes per user
-    cursors: {},                  // Track live cursors for each user
+    strokes: loadState(),
+    undoneStack: [],
+    cursors: {},
   };
 }
 
@@ -38,47 +38,31 @@ function handleSocketEvents(io, socket, state) {
   socket.on('draw', (stroke) => {
     stroke.userId = socket.id;
     state.strokes.push(stroke);
-
-    // Persist state for resilience
+    state.undoneStack = []; // Clear redo history after a new draw
     saveState(state);
-
-    // Broadcast new stroke to everyone
     io.emit('draw', stroke);
   });
 
   socket.on('undo', () => {
-    const lastIndex = [...state.strokes]
-      .reverse()
-      .findIndex((s) => s.userId === socket.id);
-
-    if (lastIndex === -1) return; // No stroke to undo for this user
-
-    const indexToRemove = state.strokes.length - 1 - lastIndex;
-    const [removedStroke] = state.strokes.splice(indexToRemove, 1);
-
-    if (!state.undoneStrokesByUser[socket.id]) {
-      state.undoneStrokesByUser[socket.id] = [];
-    }
-    state.undoneStrokesByUser[socket.id].push(removedStroke);
-
+    if (state.strokes.length === 0) return;
+    const undoneStroke = state.strokes.pop();
+    state.undoneStack = state.undoneStack || [];
+    state.undoneStack.push(undoneStroke);
     saveState(state);
     io.emit('updateCanvas', state.strokes);
   });
 
   socket.on('redo', () => {
-    const undoneList = state.undoneStrokesByUser[socket.id];
-    if (!undoneList || !undoneList.length) return;
-
-    const stroke = undoneList.pop();
-    state.strokes.push(stroke);
-
+    if (!state.undoneStack || state.undoneStack.length === 0) return;
+    const redoStroke = state.undoneStack.pop();
+    state.strokes.push(redoStroke);
     saveState(state);
     io.emit('updateCanvas', state.strokes);
   });
 
   socket.on('clearCanvas', () => {
     state.strokes = [];
-    state.undoneStrokesByUser = {};
+    state.undoneStack = [];
     saveState(state);
     io.emit('clearCanvas');
   });
@@ -93,14 +77,8 @@ function handleSocketEvents(io, socket, state) {
   });
 
   socket.on('disconnect', () => {
-    // Remove user's cursor
     delete state.cursors[socket.id];
     socket.broadcast.emit('cursorRemove', socket.id);
-
-    // Cleanup their redo history
-    delete state.undoneStrokesByUser[socket.id];
-
-    console.log(`User disconnected: ${socket.id}`);
   });
 }
 
