@@ -29,5 +29,19 @@ eraserBtn.addEventListener('click', () => {
   drawBtn.classList.remove('active');
 });
 
+// client/main.js additions (at bottom of file or merged)
+const roomInput = document.getElementById('roomInput');
+const joinRoomBtn = document.getElementById('joinRoomBtn');
+
+if (joinRoomBtn) {
+  joinRoomBtn.addEventListener('click', () => {
+    const room = (roomInput && roomInput.value && roomInput.value.trim()) || 'main';
+    if (window.joinRoom) window.joinRoom(room);
+    // update UI to indicate current room
+    window.currentRoom = room;
+    console.log('Joined room', room);
+  });
+}
+
 // Make current mode accessible globally
 window.canvasMode = () => mode;

@@ -3,22 +3,25 @@ const fs = require('fs');
 const path = require('path');
 
 const USE_PERSISTENCE = process.env.PERSIST === 'true';
-const STATE_FILE = path.join(__dirname, 'canvasState.json');
+const STATE_DIR = __dirname; // change if you want another folder
 
-// Save strokes persistently (optional resilience)
-function saveState(state) {
+// Save strokes persistently (per-room)
+function saveState(state, room = 'main') {
   try {
-    if (!USE_PERSISTENCE) return; // don't write if persistence disabled
+    if (!USE_PERSISTENCE) return;
+    const STATE_FILE = path.join(STATE_DIR, `${room}_canvasState.json`);
     fs.writeFileSync(STATE_FILE, JSON.stringify(state.strokes, null, 2));
   } catch (err) {
     console.error('Error saving canvas state:', err);
   }
 }
 
-// Load previous strokes (optional)
-function loadState() {
+// Load previous strokes (per-room)
+function loadState(room = 'main') {
   try {
-    if (fs.existsSync(STATE_FILE) && USE_PERSISTENCE) {
+    if (!USE_PERSISTENCE) return [];
+    const STATE_FILE = path.join(STATE_DIR, `${room}_canvasState.json`);
+    if (fs.existsSync(STATE_FILE)) {
       const data = fs.readFileSync(STATE_FILE, 'utf8');
       return JSON.parse(data);
     }
@@ -28,8 +31,8 @@ function loadState() {
   return [];
 }
 
-function initDrawingState() {
-  const strokes = USE_PERSISTENCE ? loadState() : [];
+function initDrawingState(room = 'main') {
+  const strokes = USE_PERSISTENCE ? loadState(room) : [];
 
   return {
     strokes,
@@ -64,36 +67,54 @@ function overlaps(s1, s2) {
   );
 }
 
+/**
+ * handleSocketEvents(io, socket, state)
+ * - io: socket.io server instance
+ * - socket: socket for this client
+ * - state: the room-specific drawing state object
+ *
+ * All broadcasts are scoped to the socket's currentRoom (socket.currentRoom).
+ */
 function handleSocketEvents(io, socket, state) {
+  // Helper: room where this socket is active
+  function room() {
+    return socket.currentRoom || 'main';
+  }
+
   socket.on('draw', (stroke) => {
-    // Ensure required fields
+    const r = room();
     stroke.userId = socket.id;
     stroke.timestamp = stroke.timestamp || Date.now();
 
-    // If this is a partial (streamed) update, try to merge with last partial stroke from same user
+    // Merge partial strokes for same user (streaming/batching)
     if (stroke.isPartial) {
       const lastStroke = state.strokes[state.strokes.length - 1];
       if (lastStroke && lastStroke.userId === socket.id && lastStroke.isPartial) {
-        // Merge paths
         lastStroke.path.push(...stroke.path);
         lastStroke.timestamp = Math.max(lastStroke.timestamp || 0, stroke.timestamp);
-        // Broadcast incremental update (clients can choose to append)
-        io.emit('draw', { ...stroke, merged: true });
-        saveState(state);
+        // broadcast to others in same room
+        io.in(r).emit('draw', { ...stroke, merged: true });
+        saveState(state, r);
         return;
       }
     }
 
-    // Erase behaves like drawing (pixel-based), so just broadcast it normally
+    // Treat eraser as a drawing operation (pixel-based)
     if (stroke.type === 'erase') {
-      state.strokes.push(stroke);
+      // Append erase stroke like other strokes (clients render with destination-out)
+      const insertIndex = state.strokes.findIndex(s => (s.timestamp || 0) > stroke.timestamp);
+      if (insertIndex === -1) {
+        state.strokes.push(stroke);
+      } else {
+        state.strokes.splice(insertIndex, 0, stroke);
+      }
       state.undoneStack = [];
-      saveState(state);
-      io.emit('draw', stroke);
+      saveState(state, r);
+      io.in(r).emit('draw', stroke);
       return;
     }
 
-    // Insert stroke based on timestamp to keep deterministic order (oldest first)
+    // Insert stroke based on timestamp to keep deterministic order
     const insertIndex = state.strokes.findIndex(s => (s.timestamp || 0) > stroke.timestamp);
     if (insertIndex === -1) {
       state.strokes.push(stroke);
@@ -101,55 +122,54 @@ function handleSocketEvents(io, socket, state) {
       state.strokes.splice(insertIndex, 0, stroke);
     }
 
-    // New draw clears redo stack
     state.undoneStack = [];
-    saveState(state);
-
-    // Broadcast new stroke (clients will append or redraw as needed)
-    io.emit('draw', stroke);
+    saveState(state, r);
+    io.in(r).emit('draw', stroke);
   });
 
   socket.on('undo', () => {
+    const r = room();
     if (state.strokes.length === 0) return;
-    // Pop the last stroke globally
     const undoneStroke = state.strokes.pop();
     state.undoneStack = state.undoneStack || [];
     state.undoneStack.push(undoneStroke);
-    saveState(state);
-    // Send updated strokes list to all clients
-    io.emit('updateCanvas', state.strokes);
+    saveState(state, r);
+    io.in(r).emit('updateCanvas', state.strokes);
   });
 
   socket.on('redo', () => {
+    const r = room();
     if (!state.undoneStack || state.undoneStack.length === 0) return;
     const redoStroke = state.undoneStack.pop();
     state.strokes.push(redoStroke);
-    saveState(state);
-    io.emit('updateCanvas', state.strokes);
+    saveState(state, r);
+    io.in(r).emit('updateCanvas', state.strokes);
   });
 
   socket.on('clearCanvas', () => {
+    const r = room();
     state.strokes = [];
     state.undoneStack = [];
-    saveState(state);
-    io.emit('clearCanvas');
+    saveState(state, r);
+    io.in(r).emit('clearCanvas');
   });
 
   socket.on('cursorMove', (pos) => {
-    // store simple cursor (x,y) for this socket and broadcast to others
+    const r = room();
     state.cursors[socket.id] = pos;
-    socket.broadcast.emit('cursorMove', { userId: socket.id, pos });
+    socket.to(r).emit('cursorMove', { userId: socket.id, pos });
   });
 
+  // When a client explicitly requests the room's canvas
   socket.on('requestCanvasState', () => {
-    // Send full canvas state to the requester (useful on reconnect)
+    const r = room();
     socket.emit('canvasState', state.strokes);
   });
 
   socket.on('disconnect', () => {
-    // remove cursor and notify others
+    const r = room();
     delete state.cursors[socket.id];
-    socket.broadcast.emit('cursorRemove', socket.id);
+    socket.to(r).emit('cursorRemove', socket.id);
   });
 }
 

@@ -1,69 +1,103 @@
 // client/websocket.js
 const socket = io();
 window.socket = socket;
+window.currentRoom = 'main';
+window.allStrokes = [];
 
-let allStrokes = [];
-
-// Initial data
-socket.on('initCanvas', (strokes) => {
-  allStrokes = strokes;
-  window.canvasAPI.redrawCanvas(allStrokes);
+// auto-join default room on connect
+socket.on('connect', () => {
+  console.log('Connected to server:', socket.id);
+  // join default room
+  socket.emit('joinRoom', window.currentRoom);
 });
 
-// New stroke broadcast
-socket.on('draw', (stroke) => {
-  allStrokes.push(stroke);
-  const type = stroke.type || 'draw';
+// Public helper: switch room
+window.joinRoom = (roomName) => {
+  if (!roomName) return;
+  // clear local canvas to avoid mixing strokes from previous room
+  window.allStrokes = [];
+  window.canvasAPI && window.canvasAPI.clearCanvas && window.canvasAPI.clearCanvas();
+  window.currentRoom = roomName;
+  socket.emit('joinRoom', roomName);
+};
 
-  for (let i = 1; i < stroke.path.length; i++) {
-    window.canvasAPI.drawLineSegment(
-      stroke.path[i - 1],
-      stroke.path[i],
-      stroke.color,
-      stroke.width,
-      type
-    );
+// init canvas for the room
+socket.on('initCanvas', (strokes) => {
+  window.allStrokes = strokes || [];
+  if (window.canvasAPI && window.canvasAPI.redrawCanvas) {
+    window.canvasAPI.redrawCanvas(window.allStrokes);
   }
 });
 
-// Undo/Redo update
-socket.on('updateCanvas', (strokes) => {
-  allStrokes = strokes;
-  window.canvasAPI.redrawCanvas(allStrokes);
+// draw event (partial or full stroke)
+socket.on('draw', (stroke) => {
+  // Handle incremental merged partials or full strokes
+  if (!stroke) return;
+  // If stroke.isPartial -> appended segments are expected
+  if (stroke.isPartial) {
+    window.allStrokes = window.allStrokes || [];
+    const last = window.allStrokes[window.allStrokes.length - 1];
+    if (last && last.userId === stroke.userId && last.isPartial) {
+      last.path.push(...stroke.path);
+    } else {
+      window.allStrokes.push(stroke);
+    }
+    // render incremental segments
+    for (let i = 1; i < stroke.path.length; i++) {
+      window.canvasAPI.drawLineSegment(stroke.path[i - 1], stroke.path[i], stroke.color, stroke.width, stroke.type);
+    }
+    return;
+  }
+
+  // completed stroke: append and draw
+  window.allStrokes = window.allStrokes || [];
+  window.allStrokes.push(stroke);
+  for (let i = 1; i < stroke.path.length; i++) {
+    window.canvasAPI.drawLineSegment(stroke.path[i - 1], stroke.path[i], stroke.color, stroke.width, stroke.type);
+  }
 });
 
-// Clear canvas
+// updateCanvas (full canvas replacement)
+socket.on('updateCanvas', (strokes) => {
+  window.allStrokes = strokes || [];
+  window.canvasAPI.redrawCanvas(window.allStrokes);
+});
+
+// clear canvas
 socket.on('clearCanvas', () => {
-  allStrokes = [];
+  window.allStrokes = [];
   window.canvasAPI.clearCanvas();
 });
 
-// Update user list
+// user list update for current room
 socket.on('userListUpdate', (users) => {
   const list = document.getElementById('userList');
-  list.innerHTML = '';
-  users.forEach((id) => {
-    const li = document.createElement('li');
-    li.textContent = id;
-    list.appendChild(li);
-  });
+  if (list) {
+    list.innerHTML = '';
+    users.forEach((id, idx) => {
+      const li = document.createElement('li');
+      const label = `User-${idx + 1}`;
+      li.textContent = label;
+      list.appendChild(li);
+      if (!window.userLabels) window.userLabels = {};
+      if (!window.userLabels[id]) window.userLabels[id] = label;
+    });
+  }
 });
 
-// When connection is lost
-socket.on('disconnect', () => {
-  console.warn('Disconnected from server...');
+// cursor moves and removal are forwarded unchanged
+socket.on('cursorMove', (data) => {
+  // forwarded to canvas.js handlers which listen on window.socket
+  // no-op here
 });
 
-// When reconnected
-socket.on('connect', () => {
-  console.log('Reconnected to server!');
-  // Re-request canvas (in case initCanvas wasn't auto-sent)
+socket.on('cursorRemove', (id) => {
+  // forwarded to canvas.js handlers (no-op here)
+});
+
+// reconnect handling: rejoin current room and request canvas state
+socket.on('reconnect', (attempt) => {
+  console.log('Reconnected after', attempt);
+  socket.emit('joinRoom', window.currentRoom);
   socket.emit('requestCanvasState');
-});
-
-// Custom event if server supports manual state request
-socket.on('canvasState', (strokes) => {
-  allStrokes = strokes || [];
-  window.canvasAPI.redrawCanvas(allStrokes);
-  console.log('Canvas restored after reconnect');
 });
