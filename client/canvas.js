@@ -80,3 +80,62 @@ function clearCanvas() {
 }
 
 window.canvasAPI = { drawLineSegment, redrawCanvas, clearCanvas };
+
+// Maintain other users' cursors
+const cursorLayer = document.createElement('canvas');
+cursorLayer.width = canvas.width;
+cursorLayer.height = canvas.height;
+cursorLayer.style.position = 'absolute';
+cursorLayer.style.left = canvas.offsetLeft + 'px';
+cursorLayer.style.top = canvas.offsetTop + 'px';
+cursorLayer.style.pointerEvents = 'none'; 
+cursorLayer.style.zIndex = 10;
+document.body.appendChild(cursorLayer);
+
+const cursorCtx = cursorLayer.getContext('2d');
+const cursors = {}; // { userId: {x, y, color} }
+
+// Track local cursor movement
+canvas.addEventListener('mousemove', (e) => {
+  if (window.socket) {
+    window.socket.emit('cursorMove', { x: e.offsetX, y: e.offsetY });
+  }
+});
+
+// Draw cursors for other users
+function drawCursors() {
+  cursorCtx.clearRect(0, 0, cursorLayer.width, cursorLayer.height);
+  Object.entries(cursors).forEach(([id, { x, y, color }]) => {
+    cursorCtx.beginPath();
+    cursorCtx.arc(x, y, 5, 0, 2 * Math.PI);
+    cursorCtx.fillStyle = color;
+    cursorCtx.fill();
+    cursorCtx.strokeStyle = '#fff';
+    cursorCtx.lineWidth = 2;
+    cursorCtx.stroke();
+  });
+  requestAnimationFrame(drawCursors);
+}
+drawCursors();
+
+// Listen for server cursor updates
+if (window.socket) {
+  window.socket.on('cursorMove', ({ userId, pos }) => {
+    if (!cursors[userId]) {
+      cursors[userId] = { ...pos, color: randomColor() };
+    } else {
+      cursors[userId].x = pos.x;
+      cursors[userId].y = pos.y;
+    }
+  });
+
+  window.socket.on('cursorRemove', (userId) => {
+    delete cursors[userId];
+  });
+}
+
+// Random pastel colors for each user cursor
+function randomColor() {
+  const colors = ['#f87171', '#60a5fa', '#34d399', '#fbbf24', '#a78bfa', '#f472b6'];
+  return colors[Math.floor(Math.random() * colors.length)];
+}
