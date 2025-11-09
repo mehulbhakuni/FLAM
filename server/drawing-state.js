@@ -1,6 +1,7 @@
 // server/drawing-state.js
 const fs = require('fs');
 const path = require('path');
+const USE_PERSISTENCE = false;
 
 const STATE_FILE = path.join(__dirname, 'canvasState.json');
 
@@ -27,8 +28,10 @@ function loadState() {
 }
 
 function initDrawingState() {
+  const strokes = USE_PERSISTENCE ? loadState() : []; 
+
   return {
-    strokes: loadState(),
+    strokes,
     undoneStack: [],
     cursors: {},
   };
